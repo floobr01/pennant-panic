@@ -1,0 +1,11 @@
+{
+  "name": "Pennant Panic",
+  "short_name": "Pennant",
+  "description": "A fast, arcade-style baseball franchise simulator.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#07110d",
+  "theme_color": "#07110d",
+  "orientation": "portrait",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
