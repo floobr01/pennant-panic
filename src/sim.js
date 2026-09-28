@@ -38,8 +38,42 @@ export function makeGame(teams, userId, opponentId, userHome, userLineup, userSt
     },
     pitcherLog:{ [away.id]:[awayStarter.id], [home.id]:[homeStarter.id] },
     stats:{}, log:[{ id:Math.random(), text:'Play ball! A fresh game begins.', kind:'info' }], finished:false, winnerId:null,
-    lastResult:null, gameNumber, userId, philosophyId,arcade:{...arcade,ballparkId:userHome?(arcade.ballparkId||'balanced'):'balanced'}
+    lastResult:null, count:{balls:0,strikes:0}, pitchSeq:0, activePitch:null, fieldEvent:null, gameNumber, userId, philosophyId,arcade:{...arcade,ballparkId:userHome?(arcade.ballparkId||'balanced'):'balanced'}
   };
+}
+
+export function preparePitch(game, teams, pitchType='fastball', target={x:50,y:50}) {
+  const matchup=currentMatchup(game,teams), seed=Math.random(), movement=pitchType==='breaking'?12:pitchType==='changeup'?-7:0;
+  return {id:(game.pitchSeq||0)+1,type:pitchType,target:{x:clamp(target.x,0,100),y:clamp(target.y,0,100)},seed,movement,createdAt:Date.now()};
+}
+
+function pitchOutside(target){return target.x<18||target.x>82||target.y<12||target.y>88}
+
+export function resolvePitch(source, teams, input={}) {
+  const game=structuredClone(source), chosenType=input.pitchType||['fastball','breaking','changeup'][Math.floor(Math.random()*3)], pitch=game.activePitch||preparePitch(game,teams,chosenType,input.target);
+  game.count??={balls:0,strikes:0};
+  const matchup=currentMatchup(game,teams), outside=pitchOutside(pitch.target), userBatting=matchup.offenseId===game.userId;
+  const timing=input.timing ?? 0, timingQuality=clamp(1-Math.abs(timing-.5)*2,0,1), direction=input.direction||'center';
+  const eye=matchup.batter?.eye||50, spin=matchup.pitcher?.spin||50;
+  let kind='strike',text='Called strike.',finish=false,context=null;
+  const take=input.action==='take'||!input.action;
+  if(take){
+    const calledBall=outside ? .78 : .16;
+    const ballChance=clamp(calledBall+(eye-50)*.002, .08, .94);
+    if(Math.random()<ballChance){game.count.balls++;kind='ball';text='Ball.'}else game.count.strikes++;
+  }else{
+    const miss=clamp(.22+(spin-(matchup.batter?.contact||50))*.002, .08, .5);
+    const foulChance=clamp(.2+timingQuality*.25,.12,.5);
+    const madeContact=timingQuality>.35 && Math.random()>miss;
+    if(!madeContact){game.count.strikes++;kind='swinging-strike';text=`${matchup.batter.name} swings through it.`}
+    else if(Math.random()<foulChance){if(game.count.strikes<2)game.count.strikes++;kind='foul';text=`${matchup.batter.name} fouls it away.`}
+    else {context={forceOutcome:timingQuality>.62?'hit':'out',hitDirection:direction,contactQuality:timingQuality};}
+  }
+  if(context){game.pendingResolution=context;game.activePitch=null;const result=stepPlateAppearance(game,teams);result.count={balls:0,strikes:0};result.pitchSeq=(game.pitchSeq||0)+1;return {...result,pitchResult:{kind:'in-play',text:result.lastResult?.text||'Ball in play.',pitch,fieldEvent:result.fieldEvent||null}}}
+  if(game.count.balls>=4){game.pendingResolution={forceOutcome:'walk'};game.activePitch=null;const result=stepPlateAppearance(game,teams);result.count={balls:0,strikes:0};result.pitchSeq=(game.pitchSeq||0)+1;return {...result,pitchResult:{kind:'walk',text:result.lastResult?.text||'A walk.',pitch}}}
+  if(game.count.strikes>=3){game.pendingResolution={forceOutcome:'strikeout'};game.activePitch=null;const result=stepPlateAppearance(game,teams);result.count={balls:0,strikes:0};result.pitchSeq=(game.pitchSeq||0)+1;return {...result,pitchResult:{kind:'strikeout',text:result.lastResult?.text||'Strike three.',pitch}}}
+  game.activePitch=null;game.pitchSeq=(game.pitchSeq||0)+1;game.lastResult={text,kind};game.log.unshift({id:Math.random(),text,kind});game.log=game.log.slice(0,8);
+  return {...game,pitchResult:{kind,text,pitch}};
 }
 
 const stat = (game,id) => game.stats[id] || { pa:0,ab:0,h:0,doubles:0,triples:0,hr:0,bb:0,so:0,rbi:0,r:0,ipOuts:0,er:0,hitsAllowed:0,bbAllowed:0,k:0 };
@@ -142,15 +176,19 @@ export function stepPlateAppearance(source, teams) {
   const walkP = clamp(.065 + (eye-control)*.0015, .025, .18);
   const strikeoutP = clamp(.17 + (velocity-contact)*.002, .07, .34);
   const hitP = clamp(.245 + (contact-spin)*.0021, .14, .39);
-  const roll=r(); let text='', kind='out', runs=0;
+  const forced=game.pendingResolution; delete game.pendingResolution;
+  const roll=forced?.forceOutcome==='walk'?0:forced?.forceOutcome==='strikeout'?.2:forced?.forceOutcome==='hit'?.65:forced?.forceOutcome==='out'?.99:r(); let text='', kind='out', runs=0;
   addStat(game,batter.id,'pa'); pitcherState.bf++;
-  if(roll < walkP) {
+  if(forced?.forceOutcome==='strikeout') {
+    game.outs++; pitcherState.outs++; addStat(game,batter.id,'ab'); addStat(game,batter.id,'so'); addStat(game,pitcher.id,'ipOuts'); addStat(game,pitcher.id,'k');
+    text=`${pitcher.name} strikes out ${batter.name}.`; kind='strikeout';
+  } else if(roll < walkP || forced?.forceOutcome==='walk') {
     const res=walk(game,batter.id,offenseId); game.bases=res.bases; runs=res.runs;
     addStat(game,batter.id,'bb'); addStat(game,pitcher.id,'bbAllowed'); text=`${batter.name} draws a walk.`; kind='walk';
   } else if(roll < walkP+strikeoutP) {
     game.outs++; pitcherState.outs++; addStat(game,batter.id,'ab'); addStat(game,batter.id,'so'); addStat(game,pitcher.id,'ipOuts'); addStat(game,pitcher.id,'k');
     text=`${pitcher.name} strikes out ${batter.name}.`;
-  } else if(r() < hitP) {
+  } else if(forced?.forceOutcome==='hit' || r() < hitP) {
     let basesTaken=1; const xb=clamp(.16+(power-50)*.006,.07,.45); const hr=clamp(.035+(power-50)*.0035,.012,.19);
     const powerRoll=r();
     if(powerRoll<hr) basesTaken=4; else if(powerRoll<xb) basesTaken=r()<.14?3:2;
@@ -181,6 +219,7 @@ export function stepPlateAppearance(source, teams) {
   } else if(game.half==='bottom' && game.inning>=9 && game.score[game.homeId]>game.score[game.awayId]) {
     finish(game,game.homeId);
   }
+  game.count={balls:0,strikes:0};
   return game;
 }
 
