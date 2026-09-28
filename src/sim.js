@@ -53,20 +53,23 @@ export function resolvePitch(source, teams, input={}) {
   const game=structuredClone(source), chosenType=input.pitchType||['fastball','breaking','changeup'][Math.floor(Math.random()*3)], pitch=game.activePitch||preparePitch(game,teams,chosenType,input.target);
   game.count??={balls:0,strikes:0};
   const matchup=currentMatchup(game,teams), outside=pitchOutside(pitch.target), userBatting=matchup.offenseId===game.userId;
-  const timing=input.timing ?? 0, timingQuality=clamp(1-Math.abs(timing-.5)*2,0,1), direction=input.direction||'center';
+  const swingTiming=input.timing ?? Math.random(), timingQuality=clamp(1-Math.abs(swingTiming-.5)*2,0,1), direction=input.direction||['left','center','right'][Math.floor(Math.random()*3)];
   const eye=matchup.batter?.eye||50, spin=matchup.pitcher?.spin||50;
   let kind='strike',text='Called strike.',finish=false,context=null;
   const take=input.action==='take'||!input.action;
   if(take){
     const calledBall=outside ? .78 : .16;
     const ballChance=clamp(calledBall+(eye-50)*.002, .08, .94);
-    if(Math.random()<ballChance){game.count.balls++;kind='ball';text='Ball.'}else game.count.strikes++;
+    if(Math.random()<ballChance){game.count.balls++;kind='ball';text=`Ball — ${outside?'missed the zone.':'the batter held.'}`}else {game.count.strikes++;text=`Called strike — ${outside?'on the edge.':'over the plate.'}`}
   }else{
     const miss=clamp(.22+(spin-(matchup.batter?.contact||50))*.002, .08, .5);
     const foulChance=clamp(.2+timingQuality*.25,.12,.5);
     const madeContact=timingQuality>.35 && Math.random()>miss;
-    if(!madeContact){game.count.strikes++;kind='swinging-strike';text=`${matchup.batter.name} swings through it.`}
-    else if(Math.random()<foulChance){if(game.count.strikes<2)game.count.strikes++;kind='foul';text=`${matchup.batter.name} fouls it away.`}
+    const timingLabel=swingTiming<.38?'early':swingTiming>.62?'late':'on time';
+    const heightLabel=pitch.target.y<34?'high':pitch.target.y>66?'low':'middle';
+    const sideLabel=direction==='left'?'left':direction==='right'?'right':'center';
+    if(!madeContact){game.count.strikes++;kind='swinging-strike';text=`${matchup.batter.name} misses — ${timingLabel}, ${sideLabel} of the ${heightLabel} pitch.`}
+    else if(Math.random()<foulChance){if(game.count.strikes<2)game.count.strikes++;kind='foul';text=`${matchup.batter.name} fouls it off — ${timingLabel} on a ${heightLabel} pitch.`}
     else {context={forceOutcome:timingQuality>.62?'hit':'out',hitDirection:direction,contactQuality:timingQuality};}
   }
   if(context){game.pendingResolution=context;game.activePitch=null;const result=stepPlateAppearance(game,teams);result.count={balls:0,strikes:0};result.pitchSeq=(game.pitchSeq||0)+1;return {...result,pitchResult:{kind:'in-play',text:result.lastResult?.text||'Ball in play.',pitch,fieldEvent:result.fieldEvent||null}}}
